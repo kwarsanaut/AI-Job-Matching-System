@@ -1,0 +1,1 @@
+func CORS() gin.HandlerFunc
