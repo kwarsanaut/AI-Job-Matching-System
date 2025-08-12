@@ -1,0 +1,6 @@
+func (h *CandidateHandler) CreateCandidate(c *gin.Context)
+func (h *CandidateHandler) GetCandidate(c *gin.Context)
+func (h *CandidateHandler) UpdateCandidate(c *gin.Context)
+func (h *CandidateHandler) SearchCandidates(c *gin.Context)
+func (h *CandidateHandler) AddWorkExperience(c *gin.Context)
+func (h *CandidateHandler) AddEducation(c *gin.Context)
