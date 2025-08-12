@@ -1,0 +1,262 @@
+# ======================================
+# AI Job Matching System - Complete Infrastructure
+# Docker Compose with all services
+# ======================================
+
+version: '3.8'
+
+services:
+  # ======================================
+  # Database Services
+  # ======================================
+  
+  # PostgreSQL with Vector Extension
+  postgres:
+    image: pgvector/pgvector:pg15
+    container_name: job_matching_postgres
+    environment:
+      POSTGRES_DB: job_matching_ai
+      POSTGRES_USER: jobmatcher
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-secure_db_password_123}
+      POSTGRES_INITDB_ARGS: "--encoding=UTF-8 --locale=en_US.UTF-8"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./database/init.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
+      - ./database/schema.sql:/docker-entrypoint-initdb.d/02-schema.sql:ro
+      - ./database/seed.sql:/docker-entrypoint-initdb.d/03-seed.sql:ro
+      - ./database/backups:/backups
+    ports:
+      - "${DB_PORT:-5432}:5432"
+    networks:
+      - job_matching_network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U jobmatcher -d job_matching_ai"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+          cpus: '1.0'
+        reservations:
+          memory: 1G
+          cpus: '0.5'
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # Redis for Caching
+  redis:
+    image: redis:7-alpine
+    container_name: job_matching_redis
+    command: redis-server --appendonly yes --requirepass ${REDIS_PASSWORD:-redis_password_123}
+    volumes:
+      - redis_data:/data
+      - ./redis/redis.conf:/usr/local/etc/redis/redis.conf:ro
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    networks:
+      - job_matching_network
+    healthcheck:
+      test: ["CMD", "redis-cli", "--raw", "incr", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: '0.5'
+
+  # Vector Database (Qdrant)
+  qdrant:
+    image: qdrant/qdrant:v1.7.0
+    container_name: job_matching_qdrant
+    volumes:
+      - qdrant_data:/qdrant/storage
+      - ./qdrant/config.yaml:/qdrant/config/production.yaml:ro
+    ports:
+      - "${QDRANT_PORT:-6333}:6333"
+      - "${QDRANT_GRPC_PORT:-6334}:6334"
+    networks:
+      - job_matching_network
+    environment:
+      QDRANT__SERVICE__HTTP_PORT: 6333
+      QDRANT__SERVICE__GRPC_PORT: 6334
+      QDRANT__LOG_LEVEL: INFO
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:6333/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+          cpus: '0.5'
+
+  # ======================================
+  # Application Services
+  # ======================================
+
+  # Backend API (Golang)
+  api:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+      target: production
+    container_name: job_matching_api
+    environment:
+      # Database
+      DATABASE_URL: postgres://jobmatcher:${DB_PASSWORD:-secure_db_password_123}@postgres:5432/job_matching_ai?sslmode=disable
+      
+      # Redis
+      REDIS_URL: redis://:${REDIS_PASSWORD:-redis_password_123}@redis:6379/0
+      
+      # Vector Database
+      QDRANT_URL: http://qdrant:6333
+      
+      # API Keys
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      HUGGINGFACE_API_KEY: ${HUGGINGFACE_API_KEY}
+      
+      # Application Settings
+      PORT: 8080
+      ENVIRONMENT: ${ENVIRONMENT:-production}
+      GIN_MODE: ${GIN_MODE:-release}
+      JWT_SECRET: ${JWT_SECRET:-your_jwt_secret_key_here}
+      
+      # Features
+      ENABLE_METRICS: ${ENABLE_METRICS:-true}
+      ENABLE_CACHING: ${ENABLE_CACHING:-true}
+      RATE_LIMIT: ${RATE_LIMIT:-100}
+      
+      # Timeouts
+      READ_TIMEOUT: ${READ_TIMEOUT:-30}
+      WRITE_TIMEOUT: ${WRITE_TIMEOUT:-30}
+      IDLE_TIMEOUT: ${IDLE_TIMEOUT:-120}
+    ports:
+      - "${API_PORT:-8080}:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      qdrant:
+        condition: service_healthy
+    networks:
+      - job_matching_network
+    volumes:
+      - ./logs/api:/app/logs
+      - ./uploads:/app/uploads
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    deploy:
+      replicas: ${API_REPLICAS:-2}
+      resources:
+        limits:
+          memory: 1G
+          cpus: '0.5'
+        reservations:
+          memory: 512M
+          cpus: '0.25'
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # Background Worker (Golang)
+  worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.worker
+      target: production
+    container_name: job_matching_worker
+    environment:
+      # Database
+      DATABASE_URL: postgres://jobmatcher:${DB_PASSWORD:-secure_db_password_123}@postgres:5432/job_matching_ai?sslmode=disable
+      
+      # Redis
+      REDIS_URL: redis://:${REDIS_PASSWORD:-redis_password_123}@redis:6379/0
+      
+      # Vector Database
+      QDRANT_URL: http://qdrant:6333
+      
+      # API Keys
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      
+      # Worker Settings
+      WORKER_CONCURRENCY: ${WORKER_CONCURRENCY:-5}
+      BATCH_SIZE: ${BATCH_SIZE:-100}
+      PROCESSING_INTERVAL: ${PROCESSING_INTERVAL:-30}
+      
+      # Email Settings
+      SMTP_HOST: ${SMTP_HOST}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_USER: ${SMTP_USER}
+      SMTP_PASSWORD: ${SMTP_PASSWORD}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      qdrant:
+        condition: service_healthy
+    networks:
+      - job_matching_network
+    volumes:
+      - ./logs/worker:/app/logs
+    restart: unless-stopped
+    deploy:
+      replicas: ${WORKER_REPLICAS:-2}
+      resources:
+        limits:
+          memory: 1G
+          cpus: '0.5'
+        reservations:
+          memory: 256M
+          cpus: '0.25'
+
+  # AI Service (Python)
+  ai_service:
+    build:
+      context: ./ai_service
+      dockerfile: Dockerfile
+      target: production
+    container_name: job_matching_ai_service
+    environment:
+      # Database
+      DATABASE_URL: postgres://jobmatcher:${DB_PASSWORD:-secure_db_password_123}@postgres:5432/job_matching_ai?sslmode=disable
+      
+      # Redis
+      REDIS_URL: redis://:${REDIS_PASSWORD:-redis_password_123}@redis:6379/0
+      
+      # Vector Database
+      QDRANT_URL: http://qdrant:6333
+      
+      # API Keys
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      HUGGINGFACE_API_KEY: ${HUGGINGFACE_API_KEY}
+      
+      # AI Service Settings
+      PORT: 8000
+      DEBUG: ${AI_DEBUG:-false}
+      LOG_LEVEL: ${AI_LOG_LEVEL:-INFO}
+      
+      # Model Settings
+      EMBEDDING_MODEL: ${EMBEDDING_MODEL:-all-MiniLM-L6-v2}
+      MAX_BATCH_SIZE: ${MAX_BATCH_SIZE:-32}
