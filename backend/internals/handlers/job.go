@@ -1,0 +1,6 @@
+func (h *JobHandler) CreateJob(c *gin.Context)
+func (h *JobHandler) GetJob(c *gin.Context)
+func (h *JobHandler) UpdateJob(c *gin.Context)
+func (h *JobHandler) DeleteJob(c *gin.Context)
+func (h *JobHandler) SearchJobs(c *gin.Context)
+func (h *JobHandler) GetJobAnalytics(c *gin.Context)
