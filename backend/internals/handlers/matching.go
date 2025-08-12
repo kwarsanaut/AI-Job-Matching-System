@@ -1,0 +1,5 @@
+func (h *MatchingHandler) CalculateMatch(c *gin.Context)
+func (h *MatchingHandler) FindCandidatesForJob(c *gin.Context)
+func (h *MatchingHandler) FindJobsForCandidate(c *gin.Context)
+func (h *MatchingHandler) BulkMatching(c *gin.Context)
+func (h *MatchingHandler) GetMatchHistory(c *gin.Context)
